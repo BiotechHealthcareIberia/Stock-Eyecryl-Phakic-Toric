@@ -1,0 +1,127 @@
+/**
+ * Stock Eyecryl Phakic Toric - Back Office
+ * Backend en Google Apps Script. Guarda el stock en la hoja "Stock".
+ *
+ * Pasos (una sola vez):
+ *  1. Crea una hoja de Google nueva -> Extensiones -> Apps Script.
+ *  2. Pega este archivo entero en Code.gs y guarda.
+ *  3. Ejecuta la función "setup" (menú superior) y acepta los permisos.
+ *  4. Implementar -> Nueva implementación -> Tipo: Aplicación web
+ *       Ejecutar como: Yo   ·   Quién tiene acceso: Cualquier usuario
+ *  5. Copia la URL que termina en /exec y pégala en config.js (API_URL).
+ */
+
+const SHEET = 'Stock';
+const HEADERS = ['id', 'modelo', 'esfera', 'cilindro', 'eje', 'lote', 'caducidad',
+                 'usada', 'usada_por', 'usada_fecha', 'nota', 'sn', 'revisar'];
+
+// [id, modelo, esfera, cilindro, eje, lote, caducidad, nº serie mostrado, revisar]
+// id = nº de serie (o x-... si no se lee entero) y nombre de la foto en img/
+const LENTES_INICIALES = [
+  ["124437153", "PC130T", -5.0, 2.5, 150, "AC26G0996-0500", "2030/06", "124437153", ""],
+  ["123709507", "PC130T", -5.0, 2.5, 150, "RC25I0146-0500", "2029/08", "123709507", ""],
+  ["122852739", "PC130T", -6.5, 0.5, 60, "AC24J0917-0650", "2028/10", "122852739", ""],
+  ["124500445", "PC130T", -7.0, 2.5, 90, "AC26G2919-0700", "2030/07", "124500445", ""],
+  ["124373046", "PC130T", -7.5, 3.5, 90, "RS26F2327-0750", "2030/05", "124373046", ""],
+  ["124373047", "PC130T", -7.5, 3.5, 90, "RS26F2327-0750", "2030/05", "124373047", ""],
+  ["122906076", "PC130T", -7.5, 3.0, 90, "AC24J1011-0750", "2028/11", "122906076", ""],
+  ["122868672", "PC130T", -7.5, 2.5, 60, "AC24J0941-0750", "2028/11", "122868672", ""],
+  ["122906075", "PC130T", -7.5, 3.0, 90, "AC24J1011-0750", "2028/11", "122906075", ""],
+  ["124347206", "PC135T", -1.0, 1.5, 0, "RS26F1332-0100", "2030/05", "124347206", ""],
+  ["121678725", "PC135T", -3.5, 1.5, 120, "AC23H1278-0350", "2027/08", "121678725", ""],
+  ["122976152", "PC135T", -4.5, 1.5, 90, "AC24L0610-0450", "2028/12", "122976152", ""],
+  ["122985533", "PC135T", -4.5, 1.5, 90, "AC24L0609-0450", "2028/12", "122985533", ""],
+  ["123378960", "PC135T", -5.5, 1.5, 0, "AC25E1406-0550", "2029/04", "123378960", "Cilindro poco legible en la foto: comprobar en la caja"],
+  ["124372921", "PC135T", -7.5, 2.0, 90, "RS26F2344-0750", "2030/05", "124372921", ""],
+  ["121680958", "PC135T", -8.0, 2.0, 90, "AC23H1488-0800", "2027/08", "121680958", ""],
+  ["124372959", "PC135T", -8.5, 2.0, 90, "RS26F2346-0850", "2030/05", "124372959", ""],
+  ["123747188", "PC135T", -8.5, 3.0, 90, "AC25I0248-0850", "2029/08", "123747188", ""],
+  ["123003867", "PC135T", -8.5, 2.0, 120, "AC24L2830-0850", "2028/12", "123003867", ""],
+  ["124279650", "PC140T", -6.0, 2.0, 120, "AC26E0526-0600", "2030/04", "124279650", ""],
+  ["123514233", "PC140T", -12.5, 3.5, 60, "AC25G3003-1250", "2029/06", "123514233", ""],
+  ["123221587", "PC140T", -13.0, 1.0, 90, "AC25D1910-1300", "2029/03", "123221587", ""],
+  ["124305785", "PC140T", -20.0, 1.5, 150, "AC26E2003-2000", "2030/04", "124305785", ""],
+  ["123915544", "PC140T", -20.0, 2.0, 0, "AC25L0324-2000", "2029/11", "123915544", ""],
+  ["x-a1", "PC135T", -15.0, 1.0, 60, "AC24L2860-1500", "2029/01", "1230?0520", "Nº de serie incompleto en la foto"],
+  ["123709713", "PC135T", -13.5, 4.0, 60, "RC25H3144-1350", "2029/08", "123709713", ""],
+  ["123830353", "PC135T", -13.0, 3.0, 150, "AC25J2806-1300", "2029/10", "123830353", ""],
+  ["x-a4", "PC135T", -12.5, 2.5, 0, "AC23A2112-1250", "2027/01", "12127221?", "Nº de serie incompleto en la foto"],
+  ["122985482", "PC135T", -11.5, 1.5, 60, "AC24L1316-1150", "2028/12", "122985482", ""],
+  ["x-a6", "PC135T", -11.5, 2.0, 60, "AC24L1322-1150", "2028/12", "1229854?0", "Nº de serie incompleto en la foto"],
+  ["123362449", "PC135T", -11.5, 3.0, 90, "AC25C2470-1150", "2029/04", "123362449", ""],
+  ["121685362", "PC135T", -10.0, 1.5, 30, "AC23H1471-1000", "2027/08", "121685362", ""],
+  ["x-a9", "PC135T", -9.5, 1.5, 60, "AC24L1318-0950", "2028/12", "12266647?", "Nº de serie incompleto en la foto"],
+  ["x-a10", "PC135T", -9.0, 2.5, 90, "AC24L1386-0900", "2028/12", "1229949?0", "Nº de serie incompleto en la foto"],
+  ["x-a11", "PC135T", -10.5, 1.5, 60, "AC26F1601-1050", "2029/05", "1243?", "Nº de serie no se lee en la foto"],
+  ["122524831", "PC135T", null, null, null, "", "2028/07", "122524831", "Potencia, cilindro y eje no se ven en la foto"],
+  ["124381389", "PC130T", -12.0, null, null, "RS26F2873-1200", "2030/06", "124381389", "Cilindro y eje no se ven en la foto"],
+  ["123134500", "PC130T", -11.0, null, null, "AC25B0?16-1100", "2029/02", "123134500", "Cilindro y eje no se ven en la foto"],
+  ["x-b3", "PC130T", -10.0, null, null, "RC25H5???-1000", "2029/08", "12370485?", "Nº de serie, cilindro y eje por confirmar"],
+  ["123835506", "PC130T", -10.0, null, null, "AC25K0407-1000", "2029/10", "123835506", "Cilindro y eje no se ven en la foto"],
+  ["124325740", "PC130T", -9.5, null, null, "RS26F0405-0950", "2030/05", "124325740", "Cilindro y eje no se ven en la foto"],
+  ["122431550", "PC130T", -9.5, null, null, "AC24F1402-0950", "2028/05", "122431550", "Cilindro y eje no se ven en la foto"],
+  ["x-b7", "PC130T", -9.5, null, null, "AC24G26?0-0950", "2028/07", "12257034?", "Nº de serie, cilindro y eje por confirmar"],
+  ["x-b8", "PC130T", -8.5, null, null, "AC25I2740-0850", "2029/09", "1238153?9", "Potencia, nº de serie, cilindro y eje por confirmar"],
+  ["x-b9", "PC130T", -8.5, null, null, "AC24J0297-0850", "2028/11", "12227995?", "Nº de serie, cilindro y eje por confirmar"]
+];
+
+function setup() {
+  const ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(SHEET);
+  if (!sh) sh = ss.insertSheet(SHEET);
+  sh.clear();
+  sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]).setFontWeight('bold');
+  const data = LENTES_INICIALES.map(r => r.slice(0, 7).map(v => v === null ? '' : v)
+    .concat([false, '', '', '', r[7], r[8]]));
+  sh.getRange(2, 1, data.length, HEADERS.length).setValues(data);
+  sh.getRange(2, 1, data.length, 1).setNumberFormat('@');
+  sh.getRange(2, 12, data.length, 1).setNumberFormat('@');
+  sh.getRange(2, 8, data.length, 1).insertCheckboxes();
+  sh.setFrozenRows(1);
+}
+
+function doGet() {
+  return json({ ok: true, lentes: leer() });
+}
+
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const body = JSON.parse(e.postData.contents || '{}');
+    const sh = SpreadsheetApp.getActive().getSheetByName(SHEET);
+    const values = sh.getDataRange().getValues();
+    const idx = values.findIndex((r, i) => i > 0 && String(r[0]) === String(body.sn));
+    if (idx < 1) return json({ ok: false, error: 'Lente no encontrada' });
+    const row = idx + 1;
+    if (body.action === 'usar') {
+      if (values[idx][7] === true) return json({ ok: false, error: 'Esta lente ya estaba marcada como usada', lentes: leer() });
+      sh.getRange(row, 8, 1, 4).setValues([[true, String(body.por || '').slice(0, 60),
+        new Date(), String(body.nota || '').slice(0, 80)]]);
+    } else if (body.action === 'recuperar') {
+      sh.getRange(row, 8, 1, 4).setValues([[false, '', '', '']]);
+    } else {
+      return json({ ok: false, error: 'Acción no válida' });
+    }
+    SpreadsheetApp.flush();
+    return json({ ok: true, lentes: leer() });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function leer() {
+  const sh = SpreadsheetApp.getActive().getSheetByName(SHEET);
+  const values = sh.getDataRange().getValues();
+  const n = (v) => (v === '' || v === null) ? null : Number(v);
+  return values.slice(1).filter(r => r[0] !== '').map(r => ({
+    sn: String(r[0]), img: String(r[0]), snVisible: String(r[11] || r[0]), verificar: String(r[12] || ''),
+    modelo: r[1], esfera: n(r[2]), cilindro: n(r[3]), eje: n(r[4]),
+    lote: r[5], caducidad: String(r[6]),
+    usada: r[7] === true ? { por: r[8], fecha: r[9] ? new Date(r[9]).getTime() : null, nota: r[10] } : null
+  }));
+}
+
+function json(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
