@@ -606,7 +606,7 @@ const TESS_DEFAULT = {
   langPath: "https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int"
 };
 const MODELOS = ["PC130T", "PC135T", "PC140T"];
-const scan = { cands: [], dup: 0, bad: 0, photos: 0, busy: false, ocr: null, zxReady: null };
+const scan = { cands: [], dup: 0, bad: 0, photos: 0, busy: false, ocr: null, zxReady: null, log: [] };
 
 function loadScript(src) {
   return new Promise((ok, ko) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => ko(new Error("No se pudo cargar " + src)); document.head.append(s); });
@@ -647,12 +647,28 @@ function loadImg(file) {
     img.onload = () => ok(img); img.onerror = () => ko(new Error("Imagen no válida")); img.src = url;
   });
 }
-function toCanvas(img, longest) {
+function toCanvas(img, longest, filter) {
   const k = longest / Math.max(img.naturalWidth, img.naturalHeight);
-  const c = document.createElement("canvas"); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
-  const g = c.getContext("2d"); g.imageSmoothingQuality = "high"; g.drawImage(img, 0, 0, c.width, c.height); return c;
+  const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+  const g = c.getContext("2d", { willReadFrequently: true }); g.imageSmoothingQuality = "high";
+  if (filter) g.filter = filter;
+  g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+  g.drawImage(img, 0, 0, c.width, c.height); return c;
+}
+function gs1ToHRI(t) {   // texto GS1 «crudo» (con separadores FNC1) -> (01)…(17)…(10)…(21)…
+  if (/\(\d{2}\)/.test(t)) return t;
+  let s = t.replace(/^\]d2/, "").replace(/^\x1d/, ""), out = "";
+  const fixed = { "01": 14, "11": 6, "17": 6 };
+  while (s.length > 2) {
+    const ai = s.slice(0, 2); s = s.slice(2);
+    if (fixed[ai]) { out += "(" + ai + ")" + s.slice(0, fixed[ai]); s = s.slice(fixed[ai]); }
+    else if (ai === "10" || ai === "21") { const k = s.indexOf("\x1d"); const v = k < 0 ? s : s.slice(0, k); out += "(" + ai + ")" + v; s = k < 0 ? "" : s.slice(k + 1); }
+    else break;
+  }
+  return out;
 }
 function parseUDI(t) {
+  t = gs1ToHRI(t || "");
   const g = (ai) => { const m = t.match(new RegExp("\\(" + ai + "\\)([^(]+)")); return m ? m[1].trim() : ""; };
   const sn = g("21"); if (!sn) return null;
   const exp = g("17"), lot = g("10");
@@ -718,28 +734,105 @@ function gtinTable() {
   return t;
 }
 
+function blank(c) {   // lienzo vacío (pasa en algunos móviles con fotos muy grandes)
+  try {
+    const g = c.getContext("2d"); let first = null;
+    for (let i = 1; i <= 9; i++) for (let j = 1; j <= 9; j++) {
+      const p = g.getImageData(Math.floor(c.width * i / 10), Math.floor(c.height * j / 10), 1, 1).data;
+      const v = p[0] + "," + p[1] + "," + p[2];
+      if (first === null) first = v; else if (v !== first) return false;
+    }
+    return true;
+  } catch (e) { return true; }
+}
+function freeCanvas(c) { if (c) { c.width = 0; c.height = 0; } }
+/* Varias pasadas: a distintos tamaños (sirve tanto para una foto de cerca de un lateral
+   como para una foto de toda la estantería) y, si no aparece nada, con otro binarizado y más contraste. */
+async function findLabels(img, Z, onPass) {
+  const longest = Math.max(img.naturalWidth, img.naturalHeight);
+  const base = longest <= 2100 ? Math.min(4000, longest * 2) : Math.min(3200, longest);
+  const plan = [{ L: base }];
+  for (const L of [2400, 1600, 1000]) if (L < base * 0.85) plan.push({ L });
+  plan.push({ L: Math.min(2000, base), bin: "GlobalHistogram", extra: true });
+  plan.push({ L: Math.min(2000, base), filter: "grayscale(1) contrast(1.8)", extra: true });
+  const found = new Map();
+  const keep = new Set();
+  for (let p = 0; p < plan.length; p++) {
+    const st = plan[p];
+    if (st.extra && found.size) break;
+    onPass && onPass(p, plan.length);
+    let c = toCanvas(img, st.L, st.filter);
+    if (blank(c)) { freeCanvas(c); c = toCanvas(img, Math.min(st.L, 1600), st.filter); }
+    let res = [];
+    try {
+      res = await Z.readBarcodes(c.getContext("2d").getImageData(0, 0, c.width, c.height),
+        { formats: ["DataMatrix"], tryHarder: true, tryRotate: true, tryDownscale: true, maxNumberOfSymbols: 255, binarizer: st.bin || "LocalAverage" });
+    } catch (e) { console.warn("lectura", e); }
+    let used = false;
+    for (const r of res) {
+      if (!r.isValid) continue;
+      const u = parseUDI(r.text);
+      if (u && !found.has(u.sn)) { found.set(u.sn, { r, u, canvas: c }); used = true; }
+    }
+    if (used) keep.add(c); else freeCanvas(c);
+  }
+  return [...found.values()];
+}
+
+/* Plan B: si no hay códigos legibles, se lee el texto de la etiqueta (sirve para fotos de un lateral). */
+async function ocrWholeLabel(img) {
+  const w = await ocrWorker();
+  const c = toCanvas(img, Math.min(2200, Math.max(img.naturalWidth, img.naturalHeight)), "grayscale(1) contrast(1.4)");
+  await w.setParameters({ tessedit_pageseg_mode: "11", tessedit_char_whitelist: "" });
+  const { data } = await w.recognize(c);
+  const t = (data.text || "").replace(/\r/g, "");
+  const thumb = toCanvas(img, 700);
+  const foto = jpegSmall(thumb); freeCanvas(thumb); freeCanvas(c);
+  const out = [];
+  const sns = [...t.matchAll(/S\s?N\W{0,3}(\d{9})/g)].map((m) => m[1]);
+  const all9 = sns.length ? sns : [...t.matchAll(/\b(12\d{7})\b/g)].map((m) => m[1]);
+  const uniq = [...new Set(all9)];
+  for (const sn of uniq) {
+    const lot = (t.match(/[ARS][CS]\d{2}[A-Z]\d{4}-\d{4}/) || [""])[0];
+    const pm = lot.match(/-(\d{4})$/);
+    const dates = [...t.matchAll(/20(\d{2})\s?\/\s?(\d{2})/g)].map((m) => "20" + m[1] + "/" + m[2]).sort();
+    const c2 = { id: sn, sn, gtin: "", lote: lot, caducidad: dates.length ? dates[dates.length - 1] : "", foto, modelo: readModel([t]), esfera: null, cilindro: null, eje: null, src: {} };
+    if (c2.modelo) c2.src.modelo = "ocr";
+    const dm = t.match(/D\s?[:;.]\s?([-+])\s?(\d{1,2})[.,](\d)/);
+    if (pm) { c2.esfera = -(parseInt(pm[1], 10) / 100); c2.src.esfera = "lote"; } else if (dm) { c2.esfera = (dm[1] === "+" ? 1 : -1) * parseFloat(dm[2] + "." + dm[3]); c2.src.esfera = "dudoso"; }
+    const am = t.match(/Angl\w*\s*(\d{1,3})/i); if (am) { const a = readAxis(am[1]); if (a != null) { c2.eje = a; c2.src.eje = a % 15 === 0 ? "ocr" : "dudoso"; } }
+    const cm = t.match(/C\s?Y\s?L[^\n]{0,8}?([+]?\s?\d[.,]\d{2})/i); if (cm) { const v = readCyl(cm[1]); if (v != null) { c2.cilindro = v; c2.src.cilindro = (v * 2) % 1 === 0 ? "ocr" : "dudoso"; } }
+    if (uniq.length > 1) { c2.src.modelo = c2.src.modelo && "dudoso"; c2.src.eje = c2.src.eje && "dudoso"; c2.src.cilindro = c2.src.cilindro && "dudoso"; }
+    out.push(c2);
+  }
+  return out;
+}
+
 async function processPhoto(file, idx, total) {
   setProg(idx / total, `Foto ${idx + 1} de ${total}: buscando etiquetas…`);
   const img = await loadImg(file);
-  const longest = Math.max(img.naturalWidth, img.naturalHeight);
   const Z = await zx();
-  const opts = { formats: ["DataMatrix"], tryHarder: true, tryRotate: true, tryDownscale: true, maxNumberOfSymbols: 255 };
-  // Pasada principal a buena resolución (fotos de WhatsApp se amplían x2) y, si se queda corta, otra a menor tamaño.
-  let canvas = toCanvas(img, Math.max(3000, Math.min(4000, longest * 2)));
-  let res = await Z.readBarcodes(canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height), opts);
-  if (res.filter((r) => r.isValid && /\(21\)/.test(r.text)).length < 3) {
-    const c2 = toCanvas(img, Math.min(longest, 2400));
-    const r2 = await Z.readBarcodes(c2.getContext("2d").getImageData(0, 0, c2.width, c2.height), opts);
-    if (r2.filter((r) => r.isValid && /\(21\)/.test(r.text)).length > res.filter((r) => r.isValid && /\(21\)/.test(r.text)).length) { canvas = c2; res = r2; }
+  const labels = await findLabels(img, Z, (p, n) => setProg((idx + 0.4 * p / n) / total, `Foto ${idx + 1} de ${total}: buscando etiquetas (pasada ${p + 1})…`));
+  if (!labels.length) {
+    setProg((idx + 0.5) / total, `Foto ${idx + 1} de ${total}: leyendo el texto de la etiqueta…`);
+    let viaText = [];
+    try { viaText = await ocrWholeLabel(img); } catch (e) { console.warn(e); }
+    URL.revokeObjectURL(img.src);
+    if (!viaText.length) { scan.bad++; scan.log.push(`Foto ${scan.photos}: ${img.naturalWidth}×${img.naturalHeight} px, no se ha podido leer ninguna etiqueta.`); return; }
+    const knownT = new Set(allLenses().map((l) => String(l.sn)).concat(allLenses().map((l) => String(l.id))));
+    const tableT = gtinTable();
+    for (const c of viaText) {
+      if (knownT.has(c.sn) || scan.cands.some((x) => x.sn === c.sn)) { scan.dup++; continue; }
+      scan.cands.push(c);
+    }
+    return;
   }
   URL.revokeObjectURL(img.src);
-  const labels = res.filter((r) => r.isValid).map((r) => ({ r, u: parseUDI(r.text) })).filter((x) => x.u);
-  if (!labels.length) { scan.bad++; return; }
   const known = new Set(allLenses().map((l) => String(l.sn)).concat(allLenses().map((l) => String(l.id))));
   const table = gtinTable();
   let w = null;
   for (let i = 0; i < labels.length; i++) {
-    const { r, u } = labels[i];
+    const { r, u, canvas } = labels[i];
     if (known.has(u.sn) || scan.cands.some((c) => c.sn === u.sn)) { scan.dup++; continue; }
     setProg((idx + (i + 1) / labels.length) / total, `Foto ${idx + 1} de ${total}: leyendo etiqueta ${i + 1} de ${labels.length}…`);
     const pos = r.position;
@@ -765,6 +858,7 @@ async function processPhoto(file, idx, total) {
     }
     scan.cands.push(c);
   }
+  new Set(labels.map((l) => l.canvas)).forEach(freeCanvas);
 }
 
 function setProg(f, t) { $("sc-prog").hidden = false; $("sc-fill").style.width = Math.round(Math.min(1, f) * 100) + "%"; $("sc-ptxt").textContent = t; }
@@ -791,6 +885,12 @@ function renderScan() {
     if (scan.bad) sum.append(el("span", "bad", `${scan.bad} foto${scan.bad === 1 ? "" : "s"} sin etiquetas legibles`));
   }
   const box = $("scan-list"); box.replaceChildren();
+  if (scan.bad && !scan.busy) {
+    const h = el("div", "cand");
+    h.append(el("div", "hint", "Alguna foto no se ha podido leer. Prueba a acercarte más a la etiqueta, con buena luz, evitando reflejos del plástico y con el móvil recto frente a la caja."));
+    for (const l of scan.log) h.append(el("div", "ometa", l));
+    box.append(h);
+  }
   scan.cands.forEach((c, i) => {
     const d = el("div", "cand");
     const h = el("div", "chead"); const t = el("div"); t.innerHTML = ""; t.append(el("b", "", "SN " + c.sn), document.createTextNode(` · Lote ${c.lote || "—"} · Cad. ${c.caducidad || "—"}`));
@@ -821,7 +921,7 @@ function renderScan() {
 }
 
 function openScan() {
-  scan.cands = []; scan.dup = 0; scan.bad = 0; scan.photos = 0;
+  scan.cands = []; scan.dup = 0; scan.bad = 0; scan.photos = 0; scan.log = [];
   $("sc-prog").hidden = true; $("sc-sum").hidden = true; $("sc-tips").hidden = false; $("sc-err").textContent = "";
   renderScan(); show("scan");
   zx().catch(() => {}); // precarga
