@@ -161,6 +161,18 @@ main { max-width: 660px; margin: 0 auto; padding: 14px 12px 110px; display: flex
 .cand .ok { font-size: 12px; color: var(--teal); }
 #scan-list { display: flex; flex-direction: column; gap: 10px; }
 
+.scanwrap { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+.scanwrap .scanbtn { margin-left: 0; }
+.lastscan { font-size: 10.5px; text-align: center; line-height: 1.25; white-space: nowrap; }
+.lastscan span { opacity: .8; }
+.lastscan b { font-weight: 600; color: #7fe0e6; }
+.scanwrap { align-items: center; }
+.delzone { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.linkdel { align-self: flex-start; background: none; border: 0; color: #c62828; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; padding: 4px 0; text-decoration: underline; }
+.confirm { background: #fdecea; border: 1px solid #f5c2bd; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.confirm p { margin: 0; font-size: 14px; color: #8a1c13; }
+.confirm p b { font-weight: 700; }
+.btn-danger { background: #c62828; color: #fff; }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -191,7 +203,10 @@ window.CONFIG = {
       <div class="htitle">EYECRYL Phakic Toric · <b>Stock Barcelona</b></div>
       <div class="hsub" id="hsub">Cargando…</div>
     </div>
+    <div class="scanwrap">
     <button class="scanbtn" id="scan-btn" type="button" aria-label="Escanear stock con la cámara"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg><span>Escanear</span></button>
+    <div class="lastscan" id="lastscan" aria-live="polite">Último escaneo<br><b>—</b></div>
+    </div>
   </div>
   <nav aria-label="Páginas">
     <a href="#disponibles" id="nav-disp">Disponibles<span class="count" id="n-disp">0</span></a>
@@ -246,6 +261,17 @@ window.CONFIG = {
     <button class="btn btn-light" id="sh-cancel" type="button">Cancelar</button>
     <button class="btn btn-main" id="sh-ok" type="button">Reservar</button>
   </div>
+  <div class="delzone">
+    <button class="linkdel" id="del-1" type="button">Eliminar esta lente del stock</button>
+    <div class="confirm" id="del-step1" hidden>
+      <p>¿Quieres eliminar esta lente del stock?</p>
+      <div class="acts"><button class="btn btn-light" id="del-no1" type="button">Cancelar</button><button class="btn btn-danger" id="del-yes1" type="button">Sí, eliminar</button></div>
+    </div>
+    <div class="confirm" id="del-step2" hidden>
+      <p><b>Se eliminará del stock definitivamente</b> y dejará de aparecer para todo el equipo. ¿Seguro que quieres eliminarla?</p>
+      <div class="acts"><button class="btn btn-light" id="del-no2" type="button">No, mantenerla</button><button class="btn btn-danger" id="del-yes2" type="button">Eliminar definitivamente</button></div>
+    </div>
+  </div>
 </div>
 
 <div class="sheet" id="done" role="dialog" aria-modal="true" aria-labelledby="dn-title">
@@ -295,10 +321,11 @@ const GTIN = {"08905286863542": {"modelo": "PC135T", "esfera": -12.5, "cilindro"
 const MODELS = ["PC130T", "PC135T", "PC140T"];
 const API = (CONFIG.API_URL || "").trim();
 const KEY = "stock-eyecryl-bcn-reservas";
-const state = { res: {}, extra: [], loaded: false, filter: "", q: "", page: "disponibles", busy: 0 };
+const state = { res: {}, extra: [], deleted: new Set(), lastScan: 0, loaded: false, filter: "", q: "", page: "disponibles", busy: 0 };
 function allLenses() {
   const seen = new Set(LENTES.map((l) => String(l.id)));
-  return LENTES.concat((state.extra || []).filter((l) => l && l.id && !seen.has(String(l.id)) && seen.add(String(l.id))));
+  return LENTES.concat((state.extra || []).filter((l) => l && l.id && !seen.has(String(l.id)) && seen.add(String(l.id))))
+    .filter((l) => !state.deleted.has(String(l.id)));
 }
 const byId = { get: (id) => allLenses().find((l) => String(l.id) === String(id)) };
 let pending = null, lastId = null, toastTimer = null, who = "";
@@ -354,6 +381,8 @@ function render() {
   const avail = LIST.filter((l) => !state.res[l.id]);
   const reserved = LIST.filter((l) => state.res[l.id]).sort((a, b) => (state.res[b.id].at || 0) - (state.res[a.id].at || 0));
   $("n-disp").textContent = avail.length; $("n-res").textContent = reserved.length;
+  const ls = $("lastscan"); ls.replaceChildren(el("span", "", "Último escaneo"), document.createElement("br"),
+    el("b", "", state.lastScan ? new Date(state.lastScan).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"));
   $("hsub").textContent = state.loaded ? `${avail.length} disponibles · ${reserved.length} reservadas` : "Cargando…";
   const onDisp = state.page === "disponibles";
   $("page-disp").hidden = !onDisp; $("page-res").hidden = onDisp;
@@ -435,7 +464,7 @@ function openSheet(l) {
     b.addEventListener("click", () => { who = p; pp.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); $("sh-err").textContent = ""; });
     pp.append(b);
   }
-  $("sh-doc").value = ""; $("sh-err").textContent = "";
+  $("sh-doc").value = ""; $("sh-err").textContent = ""; delReset();
   show("sheet");
   setTimeout(() => $("sh-doc").focus(), 60);
 }
@@ -470,15 +499,28 @@ async function release(id, quiet) {
 
 /* ---------- datos: hoja de Google (compartido) o este navegador (prueba) ---------- */
 const KEY_L = "stock-eyecryl-bcn-lentes";
+const KEY_D = "stock-eyecryl-bcn-eliminadas";
+const KEY_S = "stock-eyecryl-bcn-ultimo-escaneo";
+function readLocalDeleted() { try { return new Set(JSON.parse(store.get(KEY_D) || "[]") || []); } catch (e) { return new Set(); } }
+function applyServer(j) {
+  if (j.reservas) state.res = j.reservas;
+  if (j.lentes) state.extra = j.lentes;
+  if (j.eliminadas) state.deleted = new Set(j.eliminadas.map(String));
+  if (j.ultimoEscaneo != null) state.lastScan = Number(j.ultimoEscaneo) || 0;
+}
+async function post(body) {
+  const j = await (await fetch(API, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) })).json();
+  applyServer(j); return j;
+}
 function readLocalLenses() { try { return JSON.parse(store.get(KEY_L) || "[]") || []; } catch (e) { return []; } }
 function readLocal() { try { return JSON.parse(store.get(KEY) || "{}") || {}; } catch (e) { return {}; } }
 async function load() {
-  if (!API) { state.res = readLocal(); state.extra = readLocalLenses(); state.loaded = true; render(); return; }
+  if (!API) { state.res = readLocal(); state.extra = readLocalLenses(); state.deleted = readLocalDeleted(); state.lastScan = Number(store.get(KEY_S) || 0); state.loaded = true; render(); return; }
   if (state.busy) return;
   try {
     const j = await (await fetch(API, { cache: "no-store" })).json();
     if (!j.ok) throw new Error(j.error);
-    state.res = j.reservas || {}; state.extra = j.lentes || []; state.loaded = true;
+    applyServer(j); state.loaded = true;
     if ($("status").dataset.kind === "net") showStatus("");
     render();
   } catch (e) { showStatus("No se puede conectar con el stock. Revisa la conexión.", "net"); }
@@ -488,15 +530,34 @@ async function saveLenses(nuevas) {
     const cur = readLocalLenses(); const ids = new Set(cur.map((l) => String(l.id)));
     const merged = cur.concat(nuevas.filter((l) => !ids.has(String(l.id))));
     try { localStorage.setItem(KEY_L, JSON.stringify(merged)); } catch (e) { return false; }
+    nuevas.forEach((l) => state.deleted.delete(String(l.id))); store.set(KEY_D, JSON.stringify([...state.deleted]));
     state.extra = merged; render(); return true;
   }
   state.busy++;
   try {
-    const j = await (await fetch(API, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "añadir", lentes: nuevas }) })).json();
-    if (j.lentes) state.extra = j.lentes; if (j.reservas) state.res = j.reservas;
+    const j = await post({ action: "añadir", lentes: nuevas });
     render(); return !!j.ok;
   } catch (e) { return false; } finally { state.busy--; }
 }
+
+async function deleteLens(id) {
+  const l = byId.get(id); if (!l) return false;
+  if (state.res[id]) { showStatus("Esta lente está reservada: libérala antes de eliminarla."); return false; }
+  state.deleted.add(String(id)); render();
+  if (!API) { store.set(KEY_D, JSON.stringify([...state.deleted])); return true; }
+  state.busy++;
+  try {
+    const j = await post({ action: "eliminar", id, lente: `${l.modelo} ${title(l)} · SN ${l.sn}` });
+    render(); if (!j.ok) { showStatus(j.error || "No se ha podido eliminar."); return false; } return true;
+  } catch (e) { state.deleted.delete(String(id)); render(); showStatus("No se ha podido eliminar. Revisa la conexión.", "net"); return false; }
+  finally { state.busy--; }
+}
+async function markScan() {
+  const now = Date.now(); state.lastScan = now; render();
+  if (!API) { store.set(KEY_S, String(now)); return; }
+  try { await post({ action: "escaneo" }); render(); } catch (e) {}
+}
+function delReset() { $("del-1").hidden = false; $("del-step1").hidden = true; $("del-step2").hidden = true; }
 async function save(action, id, r) {
   const prev = state.res[id];
   if (action === "reservar") state.res[id] = r; else delete state.res[id];
@@ -870,6 +931,7 @@ async function handleFiles(files) {
   try {
     for (let i = 0; i < list.length; i++) { scan.photos++; await processPhoto(list[i], i, list.length); renderScan(); }
     setProg(1, scan.cands.length ? "Revisa los datos con la foto de cada etiqueta y pulsa «Añadir al stock»." : "Listo.");
+    markScan();
   } catch (e) {
     console.error(e); $("sc-err").textContent = "No se ha podido leer la foto. Comprueba la conexión a internet y vuelve a intentarlo.";
   } finally { scan.busy = false; renderScan(); $("cam").value = ""; $("gal").value = ""; }
@@ -956,6 +1018,14 @@ document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", ()
 }));
 window.addEventListener("hashchange", route);
 $("scan-btn").addEventListener("click", openScan);
+$("del-1").addEventListener("click", () => { $("del-1").hidden = true; $("del-step1").hidden = false; });
+$("del-no1").addEventListener("click", delReset);
+$("del-yes1").addEventListener("click", () => { $("del-step1").hidden = true; $("del-step2").hidden = false; });
+$("del-no2").addEventListener("click", delReset);
+$("del-yes2").addEventListener("click", async () => {
+  if (!pending) return; const l = pending; closeAll();
+  if (await deleteLens(l.id)) showToast(`${l.modelo} ${fmtD(l.esfera)} · SN ${l.sn} eliminada del stock`);
+});
 $("cam").addEventListener("change", (e) => handleFiles(e.target.files));
 $("gal").addEventListener("change", (e) => handleFiles(e.target.files));
 $("sc-close").addEventListener("click", closeAll);
