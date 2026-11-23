@@ -173,6 +173,13 @@ main { max-width: 660px; margin: 0 auto; padding: 14px 12px 110px; display: flex
 .confirm p { margin: 0; font-size: 14px; color: #8a1c13; }
 .confirm p b { font-weight: 700; }
 .btn-danger { background: #c62828; color: #fff; }
+.chip-xls { background: rgba(255,255,255,.14); }
+.ver { text-align: center; font-size: 11px; color: var(--muted); padding: 8px 0 0; }
+.xlsbar { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.xlsbtn { display: inline-flex; align-items: center; gap: 8px; }
+.xlsbtn svg { width: 18px; height: 18px; }
+.xlsbtn[disabled] { opacity: .5; cursor: default; }
+.xlsmsg { font-size: 13px; color: var(--muted); }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -222,6 +229,7 @@ window.CONFIG = {
       <button class="chip" data-m="PC130T" aria-pressed="false">PC130T</button>
       <button class="chip" data-m="PC135T" aria-pressed="false">PC135T</button>
       <button class="chip" data-m="PC140T" aria-pressed="false">PC140T</button>
+      <button class="chip chip-xls" id="xls-chip" type="button" aria-label="Descargar Excel de esta pestaña">⬇ Excel</button>
     </div>
   </div>
 </header>
@@ -231,15 +239,24 @@ window.CONFIG = {
   <section id="page-disp">
     <div style="display:flex;flex-direction:column;gap:12px">
       <div class="daypill">Toca una lente para reservarla para un doctor</div>
+      <div class="xlsbar">
+        <button class="btn btn-main xlsbtn" id="xls-disp" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 7V3.5L18.5 9H13zM8.2 18l2.3-3.6L8.3 11h1.9l1.4 2.4 1.4-2.4h1.8l-2.2 3.4 2.3 3.6h-1.9L11.5 15.5 10 18H8.2z"/></svg>Descargar Excel de disponibles</button>
+        <span class="xlsmsg" id="xls-msg-disp" role="status"></span>
+      </div>
       <div id="polls" style="display:flex;flex-direction:column;gap:12px"></div>
     </div>
   </section>
   <section id="page-res" hidden>
     <div style="display:flex;flex-direction:column;gap:12px">
       <div class="daypill">Lentes reservadas · quién y para qué doctor</div>
+      <div class="xlsbar">
+        <button class="btn btn-main xlsbtn" id="xls-res" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 7V3.5L18.5 9H13zM8.2 18l2.3-3.6L8.3 11h1.9l1.4 2.4 1.4-2.4h1.8l-2.2 3.4 2.3 3.6h-1.9L11.5 15.5 10 18H8.2z"/></svg>Descargar Excel de reservas</button>
+        <span class="xlsmsg" id="xls-msg-res" role="status"></span>
+      </div>
       <div id="reslist" style="display:flex;flex-direction:column;gap:12px"></div>
     </div>
   </section>
+  <div class="ver" id="ver">Versión 23/11/2026 · stock con escáner, reservas y Excel</div>
 </main>
 
 <div class="scrim" id="scrim"></div>
@@ -321,11 +338,12 @@ const GTIN = {"08905286863542": {"modelo": "PC135T", "esfera": -12.5, "cilindro"
 const MODELS = ["PC130T", "PC135T", "PC140T"];
 const API = (CONFIG.API_URL || "").trim();
 const KEY = "stock-eyecryl-bcn-reservas";
-const state = { res: {}, extra: [], deleted: new Set(), lastScan: 0, loaded: false, filter: "", q: "", page: "disponibles", busy: 0 };
+const state = { res: {}, extra: [], deleted: new Set(), fotos: {}, lastScan: 0, loaded: false, filter: "", q: "", page: "disponibles", busy: 0 };
 function allLenses() {
   const seen = new Set(LENTES.map((l) => String(l.id)));
   return LENTES.concat((state.extra || []).filter((l) => l && l.id && !seen.has(String(l.id)) && seen.add(String(l.id))))
-    .filter((l) => !state.deleted.has(String(l.id)));
+    .filter((l) => !state.deleted.has(String(l.id)))
+    .map((l) => state.fotos[String(l.id)] ? Object.assign({}, l, { foto: state.fotos[String(l.id)] }) : l);
 }
 const byId = { get: (id) => allLenses().find((l) => String(l.id) === String(id)) };
 let pending = null, lastId = null, toastTimer = null, who = "";
@@ -381,6 +399,7 @@ function render() {
   const avail = LIST.filter((l) => !state.res[l.id]);
   const reserved = LIST.filter((l) => state.res[l.id]).sort((a, b) => (state.res[b.id].at || 0) - (state.res[a.id].at || 0));
   $("n-disp").textContent = avail.length; $("n-res").textContent = reserved.length;
+  $("xls-res").disabled = !reserved.length; $("xls-disp").disabled = !avail.length;
   const ls = $("lastscan"); ls.replaceChildren(el("span", "", "Último escaneo"), document.createElement("br"),
     el("b", "", state.lastScan ? new Date(state.lastScan).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"));
   $("hsub").textContent = state.loaded ? `${avail.length} disponibles · ${reserved.length} reservadas` : "Cargando…";
@@ -501,12 +520,20 @@ async function release(id, quiet) {
 const KEY_L = "stock-eyecryl-bcn-lentes";
 const KEY_D = "stock-eyecryl-bcn-eliminadas";
 const KEY_S = "stock-eyecryl-bcn-ultimo-escaneo";
+const KEY_F = "stock-eyecryl-bcn-fotos";
+function readLocalFotos() { try { return JSON.parse(store.get(KEY_F) || "{}") || {}; } catch (e) { return {}; } }
+async function saveFotos(list) {
+  list.forEach((x) => { state.fotos[String(x.id)] = x.foto; }); render();
+  if (!API) { try { localStorage.setItem(KEY_F, JSON.stringify(state.fotos)); return true; } catch (e) { return false; } }
+  try { const j = await post({ action: "fotos", fotos: list }); render(); return !!j.ok; } catch (e) { return false; }
+}
 function readLocalDeleted() { try { return new Set(JSON.parse(store.get(KEY_D) || "[]") || []); } catch (e) { return new Set(); } }
 function applyServer(j) {
   if (j.reservas) state.res = j.reservas;
   if (j.lentes) state.extra = j.lentes;
   if (j.eliminadas) state.deleted = new Set(j.eliminadas.map(String));
   if (j.ultimoEscaneo != null) state.lastScan = Number(j.ultimoEscaneo) || 0;
+  if (j.fotos) state.fotos = j.fotos;
 }
 async function post(body) {
   const j = await (await fetch(API, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) })).json();
@@ -515,7 +542,7 @@ async function post(body) {
 function readLocalLenses() { try { return JSON.parse(store.get(KEY_L) || "[]") || []; } catch (e) { return []; } }
 function readLocal() { try { return JSON.parse(store.get(KEY) || "{}") || {}; } catch (e) { return {}; } }
 async function load() {
-  if (!API) { state.res = readLocal(); state.extra = readLocalLenses(); state.deleted = readLocalDeleted(); state.lastScan = Number(store.get(KEY_S) || 0); state.loaded = true; render(); return; }
+  if (!API) { state.res = readLocal(); state.extra = readLocalLenses(); state.deleted = readLocalDeleted(); state.fotos = readLocalFotos(); state.lastScan = Number(store.get(KEY_S) || 0); state.loaded = true; render(); return; }
   if (state.busy) return;
   try {
     const j = await (await fetch(API, { cache: "no-store" })).json();
@@ -667,7 +694,7 @@ const TESS_DEFAULT = {
   langPath: "https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int"
 };
 const MODELOS = ["PC130T", "PC135T", "PC140T"];
-const scan = { cands: [], dup: 0, bad: 0, photos: 0, busy: false, ocr: null, zxReady: null, log: [] };
+const scan = { cands: [], dup: 0, bad: 0, photos: 0, busy: false, ocr: null, zxReady: null, log: [], fotos: {}, fotosSaved: 0 };
 
 function loadScript(src) {
   return new Promise((ok, ko) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => ko(new Error("No se pudo cargar " + src)); document.head.append(s); });
@@ -845,10 +872,23 @@ async function ocrWholeLabel(img) {
   const w = await ocrWorker();
   const c = toCanvas(img, Math.min(2200, Math.max(img.naturalWidth, img.naturalHeight)), "grayscale(1) contrast(1.4)");
   await w.setParameters({ tessedit_pageseg_mode: "11", tessedit_char_whitelist: "" });
-  const { data } = await w.recognize(c);
+  const { data } = await w.recognize(c, {}, { blocks: true });
   const t = (data.text || "").replace(/\r/g, "");
-  const thumb = toCanvas(img, 700);
-  const foto = jpegSmall(thumb); freeCanvas(thumb); freeCanvas(c);
+  // foto: recorte alrededor del texto de la etiqueta (no la foto entera)
+  const kw = /EYECRYL|PHAKIC|TORIC|^LOT|^SN|STER|Serial|Number|Axis|Angle|CYL|PC1|^D[:;]|\d{6,}|20\d\d\//i;
+  const ws = (data.words || []).filter((x) => x && x.bbox && kw.test(x.text || "") && (x.confidence || 0) > 30);
+  let foto;
+  if (ws.length >= 3) {
+    let x0 = Math.min(...ws.map((x) => x.bbox.x0)), y0 = Math.min(...ws.map((x) => x.bbox.y0));
+    let x1 = Math.max(...ws.map((x) => x.bbox.x1)), y1 = Math.max(...ws.map((x) => x.bbox.y1));
+    const mx = (x1 - x0) * 0.1, my = (y1 - y0) * 0.15;
+    x0 = Math.max(0, x0 - mx); y0 = Math.max(0, y0 - my); x1 = Math.min(c.width, x1 + mx); y1 = Math.min(c.height, y1 + my);
+    const k = Math.min(1, 640 / (x1 - x0));
+    const o = document.createElement("canvas"); o.width = Math.round((x1 - x0) * k); o.height = Math.round((y1 - y0) * k);
+    o.getContext("2d").drawImage(img, x0 * img.naturalWidth / c.width, y0 * img.naturalHeight / c.height, (x1 - x0) * img.naturalWidth / c.width, (y1 - y0) * img.naturalHeight / c.height, 0, 0, o.width, o.height);
+    foto = jpegSmall(o); freeCanvas(o);
+  } else { const thumb = toCanvas(img, 700); foto = jpegSmall(thumb); freeCanvas(thumb); }
+  freeCanvas(c);
   const out = [];
   const sns = [...t.matchAll(/S\s?N\W{0,3}(\d{9})/g)].map((m) => m[1]);
   const all9 = sns.length ? sns : [...t.matchAll(/\b(12\d{7})\b/g)].map((m) => m[1]);
@@ -883,7 +923,8 @@ async function processPhoto(file, idx, total) {
     const knownT = new Set(allLenses().map((l) => String(l.sn)).concat(allLenses().map((l) => String(l.id))));
     const tableT = gtinTable();
     for (const c of viaText) {
-      if (knownT.has(c.sn) || scan.cands.some((x) => x.sn === c.sn)) { scan.dup++; continue; }
+      if (knownT.has(c.sn)) { scan.dup++; scan.fotos[c.sn] = scan.fotos[c.sn] || c.foto; continue; }
+      if (scan.cands.some((x) => x.sn === c.sn)) { scan.dup++; continue; }
       scan.cands.push(c);
     }
     return;
@@ -894,7 +935,8 @@ async function processPhoto(file, idx, total) {
   let w = null;
   for (let i = 0; i < labels.length; i++) {
     const { r, u, canvas } = labels[i];
-    if (known.has(u.sn) || scan.cands.some((c) => c.sn === u.sn)) { scan.dup++; continue; }
+    if (known.has(u.sn)) { scan.dup++; scan.fotos[u.sn] = jpegSmall(cropRel(canvas, r.position, -6.6, -1.4, 3.3, 2.15, 230)); continue; }
+    if (scan.cands.some((c) => c.sn === u.sn)) { scan.dup++; const c = scan.cands.find((x) => x.sn === u.sn); c.foto = jpegSmall(cropRel(canvas, r.position, -6.6, -1.4, 3.3, 2.15, 230)); continue; }
     setProg((idx + (i + 1) / labels.length) / total, `Foto ${idx + 1} de ${total}: leyendo etiqueta ${i + 1} de ${labels.length}…`);
     const pos = r.position;
     const foto = jpegSmall(cropRel(canvas, pos, -6.6, -1.4, 3.3, 2.15, 230));
@@ -930,6 +972,8 @@ async function handleFiles(files) {
   const list = [...files];
   try {
     for (let i = 0; i < list.length; i++) { scan.photos++; await processPhoto(list[i], i, list.length); renderScan(); }
+    const upd = Object.keys(scan.fotos).filter((id) => !(id in (state.fotos || {})) || state.fotos[id] !== scan.fotos[id]);
+    if (upd.length) { setProg(1, "Actualizando fotos…"); if (await saveFotos(upd.map((id) => ({ id, foto: scan.fotos[id] })))) scan.fotosSaved += upd.length; scan.fotos = {}; }
     setProg(1, scan.cands.length ? "Revisa los datos con la foto de cada etiqueta y pulsa «Añadir al stock»." : "Listo.");
     markScan();
   } catch (e) {
@@ -944,6 +988,7 @@ function renderScan() {
     sum.hidden = false;
     sum.append(el("span", "", `${scan.cands.length} nueva${scan.cands.length === 1 ? "" : "s"}`));
     if (scan.dup) sum.append(el("span", "dup", `${scan.dup} ya estaba${scan.dup === 1 ? "" : "n"} en la lista`));
+    if (scan.fotosSaved) sum.append(el("span", "", `${scan.fotosSaved} foto${scan.fotosSaved === 1 ? "" : "s"} actualizada${scan.fotosSaved === 1 ? "" : "s"}`));
     if (scan.bad) sum.append(el("span", "bad", `${scan.bad} foto${scan.bad === 1 ? "" : "s"} sin etiquetas legibles`));
   }
   const box = $("scan-list"); box.replaceChildren();
@@ -983,7 +1028,7 @@ function renderScan() {
 }
 
 function openScan() {
-  scan.cands = []; scan.dup = 0; scan.bad = 0; scan.photos = 0; scan.log = [];
+  scan.cands = []; scan.dup = 0; scan.bad = 0; scan.photos = 0; scan.log = []; scan.fotos = {}; scan.fotosSaved = 0;
   $("sc-prog").hidden = true; $("sc-sum").hidden = true; $("sc-tips").hidden = false; $("sc-err").textContent = "";
   renderScan(); show("scan");
   zx().catch(() => {}); // precarga
@@ -991,10 +1036,69 @@ function openScan() {
 async function addScanned() {
   const nuevas = scan.cands.map((c) => ({ id: c.sn, sn: c.sn, gtin: c.gtin, modelo: c.modelo, esfera: c.esfera, cilindro: c.cilindro, eje: c.eje, lote: c.lote, caducidad: c.caducidad, foto: c.foto, revisar: "" }));
   $("sc-add").disabled = true; $("sc-add").textContent = "Guardando…";
+  nuevas.forEach((l) => { delete state.fotos[String(l.id)]; });
   const ok = await saveLenses(nuevas);
   if (!ok) { $("sc-err").textContent = "No se han podido guardar. Revisa la conexión y vuelve a intentarlo."; renderScan(); return; }
   const n = nuevas.length; scan.cands = []; closeAll();
   showToast(`${n} lente${n === 1 ? "" : "s"} añadida${n === 1 ? "" : "s"} al stock`);
+}
+
+
+/* ---------- Excel de reservas ---------- */
+const XLSX_SRC = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+function xlsRows(kind) {
+  const LIST = allLenses();
+  if (kind === "res") {
+    return LIST.filter((l) => state.res[l.id]).sort((a, b) => (state.res[b.id].at || 0) - (state.res[a.id].at || 0)).map((l) => {
+      const r = state.res[l.id];
+      return { "Producto": "EYECRYL PHAKIC TORIC", "Talla (modelo)": l.modelo, "Esfera (D)": l.esfera, "Cilindro (D)": l.cilindro, "Eje (°)": l.eje,
+        "Nº de serie": String(l.sn), "Lote": l.lote || "", "Caducidad": l.caducidad || "", "GTIN": l.gtin || "", "Almacén": CONFIG.ALMACEN,
+        "Reservada por": r.quien || "", "Doctor": r.doctor || "", "Fecha de reserva": r.at ? new Date(r.at) : "" };
+    });
+  }
+  const base = new Set(LENTES.map((l) => String(l.id)));
+  return LIST.filter((l) => !state.res[l.id])
+    .sort((a, b) => MODELS.indexOf(a.modelo) - MODELS.indexOf(b.modelo) || num(b.esfera) - num(a.esfera) || num(a.cilindro) - num(b.cilindro) || String(a.sn).localeCompare(String(b.sn)))
+    .map((l) => ({ "Producto": "EYECRYL PHAKIC TORIC", "Talla (modelo)": l.modelo, "Esfera (D)": l.esfera, "Cilindro (D)": l.cilindro, "Eje (°)": l.eje,
+      "Nº de serie": String(l.sn), "Lote": l.lote || "", "Caducidad": l.caducidad || "", "GTIN": l.gtin || "", "Almacén": CONFIG.ALMACEN,
+      "Origen": base.has(String(l.id)) ? "Listado inicial" : "Escaneada" }));
+}
+async function downloadXlsx(kind) {
+  const btn = $(kind === "res" ? "xls-res" : "xls-disp"), msg = $(kind === "res" ? "xls-msg-res" : "xls-msg-disp");
+  const rows = xlsRows(kind);
+  const what = kind === "res" ? "reservas" : "lentes disponibles";
+  if (!rows.length) { msg.textContent = `No hay ${what} que descargar.`; setTimeout(() => { msg.textContent = ""; }, 4000); return; }
+  btn.disabled = true; msg.textContent = "Preparando el Excel…";
+  try {
+    if (!window.XLSX) await loadScript(XLSX_SRC);
+    const ws = XLSX.utils.json_to_sheet(rows, { cellDates: true });
+    const cols = Object.keys(rows[0]);
+    ws["!cols"] = cols.map((k) => ({ wch: Math.max(k.length + 2, ...rows.map((r) => String(r[k] instanceof Date ? "00/00/0000 00:00" : r[k] ?? "").length + 2)) }));
+    ws["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length, c: cols.length - 1 } }) };
+    for (let i = 0; i < rows.length; i++) {
+      const fi = cols.indexOf("Fecha de reserva");
+      if (fi >= 0) { const fc = ws[XLSX.utils.encode_cell({ r: i + 1, c: fi })]; if (fc && fc.t === "d") fc.z = "dd/mm/yyyy hh:mm"; }
+      for (const k of ["Esfera (D)", "Cilindro (D)"]) { const c = ws[XLSX.utils.encode_cell({ r: i + 1, c: cols.indexOf(k) })]; if (c && c.t === "n") c.z = "+0.00;-0.00;0.00"; }
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, kind === "res" ? "Reservas" : "Disponibles");
+    wb.Props = { Title: (kind === "res" ? "Reservas" : "Disponibles") + " Eyecryl Phakic Toric " + CONFIG.ALMACEN, Author: "Biotech" };
+    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array", cellDates: true });
+    const name = `${kind === "res" ? "Reservas" : "Disponibles"}_Eyecryl_Toric_${CONFIG.ALMACEN}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    let dl = null;
+    try { if (window.claude && window.claude.use) dl = await window.claude.use("downloads"); } catch (e) { dl = null; }
+    if (dl) {
+      try { await dl.save({ filename: name, data: buf }); msg.textContent = "Excel descargado."; }
+      catch (e) { msg.textContent = e && e.code === "declined" ? "Descarga cancelada." : "No se ha podido descargar aquí."; }
+    } else {
+      const url = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const a = document.createElement("a"); a.href = url; a.download = name; document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      msg.textContent = `Excel descargado (${rows.length} ${rows.length === 1 ? (kind === "res" ? "reserva" : "lente") : what}).`;
+    }
+  } catch (e) {
+    console.error(e); msg.textContent = "No se ha podido crear el Excel. Revisa la conexión y vuelve a intentarlo.";
+  } finally { btn.disabled = false; setTimeout(() => { msg.textContent = ""; }, 5000); }
 }
 
 function route() { state.page = location.hash === "#reservadas" ? "reservadas" : "disponibles"; render(); window.scrollTo(0, 0); }
@@ -1013,11 +1117,14 @@ $("q").addEventListener("input", (e) => {
   if (clean !== e.target.value) e.target.value = clean;
   state.q = clean; render();
 });
-document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => {
-  state.filter = c.dataset.m; document.querySelectorAll(".chip").forEach((x) => x.setAttribute("aria-pressed", String(x === c))); render();
+document.querySelectorAll(".chip[data-m]").forEach((c) => c.addEventListener("click", () => {
+  state.filter = c.dataset.m; document.querySelectorAll(".chip[data-m]").forEach((x) => x.setAttribute("aria-pressed", String(x === c))); render();
 }));
 window.addEventListener("hashchange", route);
 $("scan-btn").addEventListener("click", openScan);
+$("xls-res").addEventListener("click", () => downloadXlsx("res"));
+$("xls-disp").addEventListener("click", () => downloadXlsx("disp"));
+$("xls-chip").addEventListener("click", () => downloadXlsx(state.page === "reservadas" ? "res" : "disp"));
 $("del-1").addEventListener("click", () => { $("del-1").hidden = true; $("del-step1").hidden = false; });
 $("del-no1").addEventListener("click", delReset);
 $("del-yes1").addEventListener("click", () => { $("del-step1").hidden = true; $("del-step2").hidden = false; });
